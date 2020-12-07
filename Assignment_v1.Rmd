@@ -1,0 +1,1141 @@
+---
+title: "TABA Assignment"
+author: Team - Animesh Mishra, Snigha Prasad, Githu Maria John, Varun Sethi, Sonaldeep Singh
+date: "29/12/2019"
+output: html_document
+---
+
+
+```{r Installing and Invoking necessary libraries}
+rm(list=ls())
+
+suppressPackageStartupMessages({
+
+try(require(tidytext) || install.packages("tidytext", dependencies = TRUE))
+try(require(tm) || install.packages("tm", dependencies = TRUE))
+try(require(dplyr) || install.packages("dplyr", dependencies = TRUE))
+try(require(ggplot2) || install.packages("ggplot2", dependencies = TRUE))
+try(require(tidyr) || install.packages("tidyr", dependencies = TRUE))
+try(require(wordcloud) || install.packages("wordcloud", dependencies = TRUE))
+try(require(sentimentr) || install.packages("sentimentr", dependencies = TRUE))
+try(require(udpipe) || install.packages("udpipe", dependencies = TRUE))
+try(require(lattice) || install.packages("lattice", dependencies = TRUE))
+try(require(igraph) || install.packages("igraph", dependencies = TRUE))  
+try(require(ggraph) || install.packages("ggraph", dependencies = TRUE))
+
+
+library(tidytext)
+library(dplyr)
+library(tm)
+library(ggplot2)
+library(tidyr)
+library(sentimentr)
+library(udpipe)
+library(lattice)
+library(igraph)
+library(ggraph)
+})
+```
+
+
+###UserDefined Functions
+
+User Defined function that returns the text that - remove(HTML tags, White Spaces), convert(lowercase), & retains(ASCII, AlphaNumeric)
+```{r UDF for clean text}
+func_clean_text <- function(y, remove_numbers = TRUE)
+{
+  
+  y  <-  gsub("<.*?>", " ", y)               # regex for removing HTML tags
+  y  <-  iconv(y, "latin1", "ASCII", sub="") # Keep only ASCII characters
+  y  <-  gsub("[^[:alnum:]]", " ", y)        # keep only alpha numeric 
+  y  <-  tolower(y)                          # convert to lower case characters
+  y  <-  stripWhitespace(y)                  # removing white space
+  y  <-  gsub("^\\s+|\\s+$", "", y)          # regex to remove leading and trailing white space
+  
+  if (remove_numbers)
+    { 
+      y  =  removeNumbers(y) # removing numbers
+    } 
+  
+  return(y)
+}
+```
+
+
+User defined function that returns the list of stopwords
+```{r UDF for Stopwords}
+func_getStopWords <- function()
+{
+  data(stop_words)
+  
+  stpw1 <- stop_words$word
+  
+  # read std stopwords list from Sudhir Voleti's github
+  stpw2 <- readLines('https://raw.githubusercontent.com/sudhir-voleti/basic-text-analysis-shinyapp/master/data/stopwords.txt')
+  
+  # tm package stop word list; tokenizer package has the same name function, hence 'tm::'
+  stpw3 <- tm::stopwords('english') 
+  
+  
+  #Stop-Words Text DataFrame
+  comn  <- tibble(word = unique(c(stpw1,stpw2,stpw3)))         # Union of the three lists
+  
+  return(comn)
+ }
+```
+
+```{r UDF for Stopwords}
+custom_stop_words <- bind_rows(stop_words, 
+                               tibble(word = c("kia", "seltos", "car", "cars","mg","hector","jeep","compass"), 
+                                      lexicon = rep("custom", 8)))
+
+head(custom_stop_words)
+```
+
+Userdefined function for - Tokenization(at word and bigram level only) and to get DTM-tf/DTM-tfidf
+```{r UDF for Tokenization at word/bigram level, DTM-tf and DTM-tfidf}
+func_dtm_build <- function(raw_corpus, token_level = 'words', tfidf = 'FALSE')
+{
+  
+  #clean the text
+  raw_corpus1 <- func_clean_text(raw_corpus)
+  
+  
+  #get the list of Stop-Words
+  stpwrds <- func_getStopWords()
+  
+  
+  #textdf = data_frame(text = raw_corpus)
+  textdf = tibble(text = raw_corpus1)
+  head(textdf)
+  
+  
+  #To create a DTM it is required to have - Document, Term, Count
+  if(token_level == 'words' && tfidf == 'FALSE')
+  { tidy_text <- textdf %>% 
+                 mutate(docid = row_number()) %>%
+                 unnest_tokens(word,text) %>%
+                 anti_join(stpwrds) %>%
+                 group_by(docid) %>%
+                 count(word,sort = TRUE)%>% 
+                 rename(value = n) %>%
+                 arrange(docid)  
+    
+  tidy_text_1 <- tidy_text
+  }
+    
+  
+  else if (token_level == 'words' && tfidf == 'TRUE')
+  {
+    tidy_text <- textdf %>% 
+                 mutate(docid = row_number()) %>%
+                 unnest_tokens(word,text) %>%
+                 anti_join(stpwrds) %>%
+                 group_by(docid) %>%
+                 count(word,sort = TRUE)%>% 
+                 ungroup() %>%
+                 bind_tf_idf(word, docid, n) %>%
+                 rename(value = tf_idf)%>%
+                 arrange(docid)  
+    
+    tidy_text_1 <- tidy_text
+  }
+  
+  
+  else if(token_level == 'bigrams' && tfidf == 'FALSE')
+  { tidy_text <- textdf %>% 
+                 mutate(docid = row_number()) %>%
+                 unnest_tokens(bigram,text, token = 'ngrams', n = 2)
+    
+    
+    separated_text <- tidy_text %>% separate(bigram,c("word1","word2"), sep = " ")
+    
+    
+    bigram_tidy_text <- separated_text %>% 
+                        filter(!word1 %in% stpwrds$word) %>%
+                        filter(!word2 %in% stpwrds$word) %>%
+                        group_by(docid) %>%
+                        count(word1,word2, sort = TRUE) %>%
+                        unite(word, word1, word2, sep = " ") %>% 
+                        rename(value = n)%>%
+                        arrange(docid)  
+    
+    tidy_text_1 <- bigram_tidy_text
+  }
+  
+  else if (token_level == 'bigrams' && tfidf == 'TRUE')
+  { 
+    tidy_text <- textdf %>% 
+                 mutate(docid = row_number()) %>%
+                 unnest_tokens(bigram,text, token = 'ngrams', n = 2)
+    
+    separated_text <- tidy_text %>% separate(bigram,c("word1","word2"), sep = " ")
+    
+    
+    bigram_tidy_text <- separated_text %>% 
+                        filter(!word1 %in% stpwrds$word) %>%
+                        filter(!word2 %in% stpwrds$word) %>%
+                        group_by(docid) %>%
+                        count(word1,word2, sort = TRUE) %>%
+                        ungroup() %>%
+                        unite(word, word1, word2, sep = " ") %>%
+                        bind_tf_idf(word, docid, n) %>%
+                        rename(value = tf_idf)%>%
+                        arrange(docid)  
+    
+    tidy_text_1 <- bigram_tidy_text
+  }
+  
+  dtm <- tidy_text_1 %>% cast_sparse(docid, word, value)
+  
+  
+  #Sum each columns
+  colsum <- apply(dtm,2,sum)
+  col.order <- order(colsum, decreasing=TRUE)
+  row.order <- order(rownames(dtm) %>% as.numeric())
+  
+  
+  dtm1 <- dtm[row.order,col.order]
+  
+  #return(dtm1)
+  return(list(tidy_text_1,dtm1))
+}
+```
+
+
+
+User defined function to create WordCloud from DTM 
+```{r}
+func_build_wordcloud <- function(dtm, 
+                                max.words1=150,     # max no. of words to accommodate
+                                min.freq=5,       # min.freq of words to consider
+                                plot.title="wordcloud") # write within double quotes
+{          
+
+ require(wordcloud)
+ 
+  if (ncol(dtm) > 20000) # if dtm is overly large, break into chunks and solve
+   {   
+      tst = round(ncol(dtm)/100)  # divide DTM's cols into 100 manageble parts
+      a = rep(tst,99)
+      b = cumsum(a);
+      rm(a)
+      b = c(0,b,ncol(dtm))
+      
+      ss.col = c(NULL)
+      
+      for (i in 1:(length(b)-1)) 
+        {
+          tempdtm = dtm[,(b[i]+1):(b[i+1])]
+          s = colSums(as.matrix(tempdtm))
+          ss.col = c(ss.col,s)
+      
+              print(i)
+        } # i loop ends
+      
+      tsum = ss.col
+
+    }
+  
+  else 
+    { 
+      tsum = apply(dtm, 2, sum)
+    }
+  
+  tsum = tsum[order(tsum, decreasing = T)]       # terms in decreasing order of freq
+  head(tsum); 
+  tail(tsum)
+
+ # windows()  # Opens a new plot window when active
+ wordcloud(names(tsum), tsum,     # words, their freqs 
+          scale = c(3.5, 0.5),     # range of word sizes
+          min.freq,                     # min.freq of words to consider
+          max.words = max.words1,       # max #words
+          colors = brewer.pal(8, "Dark2"))    # Plot results in a word cloud 
+ title(sub = plot.title)     # title for the wordcloud display
+
+    } # func ends
+```
+
+
+
+
+
+###Read CSV Files
+
+Read scrapped CSV files
+```{r Read Scrapped data}
+seltos_df <- read.csv("C:\\Users\\snigd\\OneDrive\\Desktop\\ISB\\Term 2\\TABA\\Assignment\\CarDekhoSeltos.csv",stringsAsFactors = FALSE)
+
+
+hector_df <- read.csv("C:\\Users\\snigd\\OneDrive\\Desktop\\ISB\\Term 2\\TABA\\Assignment\\CarDekhoHector.csv",stringsAsFactors = FALSE)
+
+
+compass_df <- read.csv("C:\\Users\\snigd\\OneDrive\\Desktop\\ISB\\Term 2\\TABA\\Assignment\\CarDekhoJeepCompass.csv",stringsAsFactors = FALSE)
+
+
+```
+
+EDA : BoW
+
+###Bag Of Words Approach (Tokenization and DTM)
+
+For Kia Seltos, tokenize the reviews at "Word" and "Bi-grams" level.
+Also, get the Document Term Matrix(DTM) to measure tokens at - TF and IDF
+```{r}
+seltos_wordtoken_dtmtf  <- func_dtm_build(seltos_df$reviewText,'words','FALSE')
+seltos_wordtoken_dtmidf <- func_dtm_build(seltos_df$reviewText,'words','TRUE')
+
+
+seltos_bigramtoken_dtmtf  <- func_dtm_build(seltos_df$reviewText,'bigrams','FALSE')
+seltos_bigramtoken_dtmidf <- func_dtm_build(seltos_df$reviewText,'bigrams','TRUE')
+```
+
+
+
+Most commonly used words in the Kia Seltos reviews
+```{r}
+seltos_tidytext <- seltos_wordtoken_dtmtf[[1]] #Get the Tokenized-words
+
+seltos_tidytext %>%
+  ungroup() %>%
+  anti_join(custom_stop_words) %>%
+  select(c(word,value)) %>%
+  group_by(word) %>%
+  summarise(freq = sum(value)) %>%
+  filter(freq > 15) %>%
+  mutate(word = reorder(word, freq)) %>%
+  ggplot(aes(word,freq)) + 
+  geom_bar(stat = "identity", col = "red", fill = "red") + 
+  coord_flip()
+
+
+```
+
+
+Word Cloud of most commonly occuring words
+```{r}
+# define a nice color palette
+pal <- brewer.pal(8,"Dark2")
+
+# Word Cloud
+seltos_tidytext %>%
+  ungroup() %>%
+  anti_join(custom_stop_words)%>%
+  select(c(word,value)) %>%
+  group_by(word) %>%
+  summarise(freq = sum(value)) %>%
+  filter(freq > 5) %>%
+  with(wordcloud(word, freq, color = pal))
+```
+
+
+
+Looking for most commonly used words with IDF as measure.
+Not useful !
+```{r Looking for words based on DTM-TFIDF}
+func_build_wordcloud(seltos_wordtoken_dtmidf[[2]])#Index-2:DTM-IDF
+```
+
+
+
+Bigram Level
+Words like - Sales Service, Infotainment System, ride quality, seats, boot space, music system
+```{r}
+seltos_tidytext1 <- seltos_bigramtoken_dtmtf[[1]] #Get the Tokenized-Bigrams
+
+seltos_tidytext1 %>%
+  ungroup() %>%
+  anti_join(custom_stop_words)%>%
+  select(c(word,value)) %>%
+  group_by(word) %>%
+  summarise(freq = sum(value)) %>%
+  with(wordcloud(word, freq, color = pal))
+```
+
+
+
+
+
+
+
+DTM - IDF at bigram level
+words - front facing
+```{r}
+func_build_wordcloud(seltos_bigramtoken_dtmidf[[2]])#Index-2:DTM-IDF
+```
+```{r}
+
+sentiments = read.csv("https://raw.githubusercontent.com/sudhir-voleti/sample-data-sets/master/sentiments.csv")
+
+sentiments %>% 
+          filter(lexicon == "AFINN") %>% 
+          head()
+```
+
+Quest - 1
+```{r}
+seltos_wordtoken_df  <- func_dtm_build(seltos_df$reviewText,'words','FALSE')
+
+seltos_tidytext3 <- seltos_wordtoken_df[[1]]
+
+
+afinn <- seltos_tidytext3 %>%
+         ungroup() %>%
+         select(c(docid,word))%>%
+         inner_join(get_sentiments('afinn')) %>%
+         group_by(docid) %>%
+         #mutate(linenumber = row_number()) %>%
+         summarise(polarity = sum(value)) %>%
+         mutate(method = 'afinn') %>%
+         arrange(docid)
+
+bing <-  seltos_tidytext3 %>%
+         ungroup() %>%
+         select(c(docid,word))%>%
+         inner_join(get_sentiments('bing')) %>%
+         group_by(docid) %>%
+         count(docid,sentiment) %>%
+         spread(sentiment,n,fill = 0) %>%
+         mutate(polarity = positive - negative) %>%
+         arrange(docid) %>%
+         mutate(method = 'bing')
+
+nrc <-   seltos_tidytext3 %>%
+         ungroup() %>%
+         select(c(docid,word))%>%
+         inner_join(get_sentiments('nrc')) %>%
+         filter(sentiment %in% c('positive','negative')) %>%
+         count(docid,sentiment) %>%
+         spread(sentiment,n,fill = 0) %>%
+         mutate(polarity = positive - negative) %>%
+         arrange(docid) %>%
+         mutate(method = 'nrc')
+
+afinn_bing_nrc <- bind_rows(afinn,bing,nrc)
+#View(afinn_bing_nrc)
+
+
+afinn_bing_nrc %>% 
+  ggplot(aes(docid,polarity, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")+
+  ylab('sentiment')
+```
+
+
+```{r}
+hector_wordtoken_df  <- func_dtm_build(hector_df$reviewText,'words','FALSE')
+
+hector_tidytext3 <- hector_wordtoken_df[[1]]
+
+
+afinn <- hector_tidytext3 %>%
+         ungroup() %>%
+         select(c(docid,word))%>%
+         inner_join(get_sentiments('afinn')) %>%
+         group_by(docid) %>%
+         #mutate(linenumber = row_number()) %>%
+         summarise(polarity = sum(value)) %>%
+         mutate(method = 'afinn') %>%
+         arrange(docid)
+
+bing <-  hector_tidytext3 %>%
+         ungroup() %>%
+         select(c(docid,word))%>%
+         inner_join(get_sentiments('bing')) %>%
+         group_by(docid) %>%
+         count(docid,sentiment) %>%
+         spread(sentiment,n,fill = 0) %>%
+         mutate(polarity = positive - negative) %>%
+         arrange(docid) %>%
+         mutate(method = 'bing')
+
+nrc <-   hector_tidytext3 %>%
+         ungroup() %>%
+         select(c(docid,word))%>%
+         inner_join(get_sentiments('nrc')) %>%
+         filter(sentiment %in% c('positive','negative')) %>%
+         count(docid,sentiment) %>%
+         spread(sentiment,n,fill = 0) %>%
+         mutate(polarity = positive - negative) %>%
+         arrange(docid) %>%
+         mutate(method = 'nrc')
+
+afinn_bing_nrc <- bind_rows(afinn,bing,nrc)
+
+
+afinn_bing_nrc %>% 
+  ggplot(aes(docid,polarity, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")+
+  ylab('sentiment')
+```
+
+
+
+```{r}
+compass_wordtoken_df <- func_dtm_build(compass_df$reviewText,'words','FALSE')
+
+
+compass_wordtoken_df3 <- compass_wordtoken_df[[1]]
+
+
+afinn <- compass_wordtoken_df3 %>%
+         ungroup() %>%
+         select(c(docid,word))%>%
+         inner_join(get_sentiments('afinn')) %>%
+         group_by(docid) %>%
+         #mutate(linenumber = row_number()) %>%
+         summarise(polarity = sum(value)) %>%
+         mutate(method = 'afinn') %>%
+         arrange(docid)
+
+bing <-  compass_wordtoken_df3 %>%
+         ungroup() %>%
+         select(c(docid,word))%>%
+         inner_join(get_sentiments('bing')) %>%
+         group_by(docid) %>%
+         count(docid,sentiment) %>%
+         spread(sentiment,n,fill = 0) %>%
+         mutate(polarity = positive - negative) %>%
+         arrange(docid) %>%
+         mutate(method = 'bing')
+
+nrc <-   compass_wordtoken_df3 %>%
+         ungroup() %>%
+         select(c(docid,word))%>%
+         inner_join(get_sentiments('nrc')) %>%
+         filter(sentiment %in% c('positive','negative')) %>%
+         count(docid,sentiment) %>%
+         spread(sentiment,n,fill = 0) %>%
+         mutate(polarity = positive - negative) %>%
+         arrange(docid) %>%
+         mutate(method = 'nrc')
+
+afinn_bing_nrc <- bind_rows(afinn,bing,nrc)
+#View(afinn_bing_nrc)
+
+
+afinn_bing_nrc %>% 
+  ggplot(aes(docid,polarity, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")+
+  ylab('sentiment')
+```
+
+
+
+
+
+
+Not using BoW approach.
+Determining the sentiment of each Document i.e. each Review
+```{r}
+require(sentimentr)
+seltos_senti  <- sentiment_by(seltos_df$reviewText)
+hector_senti  <- sentiment_by(hector_df$reviewText)
+compass_senti <- sentiment_by(compass_df$reviewText)
+```
+
+
+```{r}
+ggplot(seltos_senti, aes(x = seltos_senti$element_id, y = seltos_senti$ave_sentiment)) + 
+geom_smooth(col="blue", se=FALSE) + geom_hline(yintercept=0) + 
+geom_smooth(method="lm", formula=y~x, col="red", se=FALSE)
+```
+
+
+
+if Doc0 is at latest timestamp then it means the sentiments are averaged as positive
+
+```{r}
+ggplot(hector_senti, aes(x = hector_senti$element_id, y = hector_senti$ave_sentiment)) + 
+geom_smooth(col="blue", se=FALSE) + geom_hline(yintercept=0) + 
+geom_smooth(method="lm", formula=y~x, col="red", se=FALSE)
+```
+
+
+if Doc0 is at latest timestamp then it means the sentiments have declined else vice-versa
+
+```{r}
+ggplot(compass_senti, aes(x = compass_senti$element_id, y = compass_senti$ave_sentiment)) + 
+geom_smooth(col="blue", se=FALSE) + geom_hline(yintercept=0) + 
+geom_smooth(method="lm", formula=y~x, col="red", se=FALSE)
+```
+
+
+
+Ques2-
+
+NLP using UDPipe
+```{r}
+require(udpipe)
+
+english_model <- udpipe_load_model("./english-ewt-ud-2.4-190531.udpipe"
+)
+```
+
+
+
+POSTagging for Kia Seltos reviews
+```{r}
+seltos_cleantxt <- func_clean_text(seltos_df$reviewText,remove_numbers = TRUE)
+
+x <- udpipe_annotate(english_model,x = seltos_cleantxt, parser = "none", trace = FALSE)
+x <- as.data.frame(x)
+x
+```
+
+Get frequencies for words which are - Noun, Verb and Adjective
+```{r}
+
+stopwordslist <- func_getStopWords()
+
+seltos_nouns <- x %>% 
+                subset(.,upos %in% "NOUN")
+
+seltos_verbs <- x %>% 
+                subset(.,upos %in% "VERB")
+
+seltos_adjvs <- x %>% 
+                subset(.,upos %in% "ADJ")
+
+
+seltos_nouns_freq <- txt_freq(seltos_nouns$lemma)
+seltos_verbs_freq <- txt_freq(seltos_verbs$lemma)
+seltos_adjvs_freq <- txt_freq(seltos_adjvs$lemma)
+
+
+#seltos_nouns_freq <- seltos_nouns_freq %>%
+#                     rename(word = key) %>%
+#                     anti_join(stopwordslist) %>%
+#                     rename(key = word)
+
+seltos_verbs_freq <- seltos_verbs_freq %>%
+                     rename(word = key) %>%
+                     anti_join(stopwordslist) %>%
+                     rename(key = word)
+
+seltos_adjvs_freq <- seltos_adjvs_freq %>%
+                     rename(word = key) %>%
+                     anti_join(stopwordslist) %>%
+                     rename(key = word)
+
+
+
+seltos_nouns_freq$key <- factor(seltos_nouns_freq$key, levels = rev(seltos_nouns_freq$key))
+seltos_verbs_freq$key <- factor(seltos_verbs_freq$key, levels = rev(seltos_verbs_freq$key))
+seltos_adjvs_freq$key <- factor(seltos_adjvs_freq$key, levels = rev(seltos_adjvs_freq$key))
+```
+
+
+```{r}
+require(lattice)
+barchart(key ~ freq, data = head(seltos_nouns_freq, 20), col = "cadetblue", 
+         main = "Keywords - simple noun phrases", xlab = "Frequency")
+```
+
+
+```{r}
+barchart(key ~ freq, data = head(seltos_verbs_freq, 20), col = "cadetblue", 
+         main = "Keywords - verb phrases", xlab = "Frequency")
+```
+
+
+
+
+```{r}
+barchart(key ~ freq, data = head(seltos_adjvs_freq, 20), col = "cadetblue", 
+         main = "Keywords - adjective phrases", xlab = "Frequency")
+```
+
+
+
+
+
+
+
+```{r}
+seltos_colloc <- keywords_collocation(x = x,
+                                      term  = 'lemma',
+                                      group = c('doc_id','paragraph_id','sentence_id'))
+
+
+seltos_colloc$key <- factor(seltos_colloc$keyword, levels = rev(seltos_colloc$keyword))
+
+barchart(key ~ pmi, data = head(subset(seltos_colloc, freq > 2), 20), col = "cadetblue", 
+         main = "Keywords identified by PMI Collocation", 
+         xlab = "PMI (Pointwise Mutual Information)")
+```
+
+
+
+
+
+
+
+
+Words - Other Car,seat, comfort, engine, technology, 
+```{r}
+seltos_rake <- keywords_rake(x = x, 
+                             term = "lemma",
+                             group = c('doc_id','paragraph_id','sentence_id'), 
+                             relevant = x$upos %in% c("NOUN", "ADJ"))
+
+seltos_rake$key <- factor(seltos_rake$keyword, levels = rev(seltos_rake$keyword))
+
+barchart(key ~ rake, data = head(subset(seltos_rake, freq > 3), 20), col = "cadetblue", 
+         main = "Keywords identified by RAKE", 
+         xlab = "Rake")
+```
+
+
+
+
+```{r}
+x$phrase_tag <- as_phrasemachine(x$upos, type = "upos")# recode upos to 1-letter tag for better regex pattern
+
+stats <- keywords_phrases(x = x$phrase_tag, term = tolower(x$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+
+stats <- subset(stats, ngram > 1 & freq >3)
+
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+
+barchart(key ~ freq, data = head(stats, 20), col = "cadetblue", 
+         main = "Keywords - simple noun phrases", xlab = "Frequency")
+```
+
+
+
+
+
+```{r}
+seltos_features_list <- c('front facing','Sales Service', 'Infotainment System', 'ride quality', 'seats', 'boot space', 'music system','engine','interiors','performance','mileage','seat', 'experience','quality','comfort','improve','shake','blow','air purifier','after sale','degree camera','boot space','bose speaker','infotainment system','music system','enigne power','price range','technology','airbag','touch','sun','offer','engine power')
+
+
+
+seltos_features_list <- tolower(seltos_features_list)
+
+```
+
+
+
+
+```{r}
+car_review_df <- x[,1:4] # select doc_id, par_id, sentence_id, sentence
+car_review_df <- car_review_df[!duplicated(car_review_df),] # remove duplicate sentences
+car_review_df
+```
+
+
+
+
+
+```{r}
+car_review_senti <- sentiment_by(car_review_df$sentence)
+
+car_review_df$sentence_senti <- car_review_senti$ave_sentiment
+car_review_df
+```
+
+
+
+
+
+
+```{r}
+car_review_df$feature <- NA
+
+car_review_df$sentence <- tolower(car_review_df$sentence)
+
+for (feature in seltos_features_list)
+{ 
+  car_review_df$feature <- ifelse(grepl(feature,car_review_df$sentence),feature,car_review_df$feature)
+}
+ 
+car_review_df
+```
+
+
+```{r}
+car_review_df %>% 
+  select(doc_id,sentence_senti,feature)%>%
+  group_by(feature)%>%
+  summarise(mean_sentiment = mean(sentence_senti))
+```
+
+Check comment 2
+```{r}
+car_review_df %>%
+  filter(feature=="bose speaker")%>%
+  select(sentence,sentence_senti)
+```
+
+Check comment 2
+```{r}
+car_review_df %>%
+  filter(feature=="airbag")%>%
+  select(sentence,sentence_senti)
+```
+
+Check the below point
+```{r}
+car_review_df %>%
+  filter(feature=="improve")%>%
+  select(sentence,sentence_senti)
+```
+
+```{r}
+car_review_df %>%
+  filter(feature=="engine")%>%
+  select(sentence,sentence_senti)
+```
+
+
+
+
+```{r Using nrc dictionary to find relation between features and emotions}
+# view nrc dict structure
+nrc = sentiments %>% filter(lexicon == "nrc") # get_sentiments("nrc")
+#nrc
+seltos_tidytext3
+#nrc1 = nrc[, c(2,3)]; head(nrc1)
+# use NRC lexicon now 
+senti.nrc = seltos_tidytext3 %>%
+      inner_join(nrc1) %>%
+      filter(sentiment == "anger") %>%
+      mutate(method = "nrc")
+
+senti.nrc
+```
+if(str_detect(data,i)){
+                    print(i)
+                    print(data)
+```{r}
+#car_review_df$sentence
+
+keywords <- senti.nrc$word
+#keywords
+
+for (data in car_review_df$sentence) {
+            for (i in keywords ){
+                print(str_detect(data,i))
+                   
+                }}
+```
+
+Ques-3 - For Hector and Compass
+```{r}
+hector_cleantxt <- func_clean_text(hector_df$reviewText,remove_numbers = TRUE)
+
+
+y <- udpipe_annotate(english_model,x = hector_cleantxt , parser = "none", trace = FALSE)
+y <- as.data.frame(y)
+y
+
+
+
+compass_cleantxt <- func_clean_text(compass_df$reviewText,remove_numbers = TRUE)
+
+z <- udpipe_annotate(english_model,x = compass_cleantxt, parser = "none", trace = FALSE)
+z <- as.data.frame(z)
+z
+```
+
+
+
+
+
+Hector
+```{r}
+hector_nouns <- y %>% 
+                subset(.,upos %in% "NOUN")
+
+hector_verbs <- y %>% 
+                subset(.,upos %in% "VERB")
+
+hector_adjvs <- y %>% 
+                subset(.,upos %in% "ADJ")
+
+
+hector_nouns_freq <- txt_freq(hector_nouns$lemma)
+hector_verbs_freq <- txt_freq(hector_verbs$lemma)
+hector_adjvs_freq <- txt_freq(hector_adjvs$lemma)
+
+
+hector_verbs_freq <- hector_verbs_freq %>%
+                     rename(word = key) %>%
+                     anti_join(stopwordslist) %>%
+                     rename(key = word)
+
+hector_adjvs_freq <- hector_adjvs_freq %>%
+                     rename(word = key) %>%
+                     anti_join(stopwordslist) %>%
+                     rename(key = word)
+
+
+
+hector_nouns_freq$key <- factor(hector_nouns_freq$key, levels = rev(hector_nouns_freq$key))
+hector_verbs_freq$key <- factor(hector_verbs_freq$key, levels = rev(hector_verbs_freq$key))
+hector_adjvs_freq$key <- factor(hector_adjvs_freq$key, levels = rev(hector_adjvs_freq$key))
+
+
+barchart(key ~ freq, data = head(hector_nouns_freq, 20), col = "cadetblue", 
+         main = "Keywords - simple noun phrases", xlab = "Frequency")
+
+
+
+
+barchart(key ~ freq, data = head(hector_verbs_freq, 20), col = "cadetblue", 
+         main = "Keywords - verb phrases", xlab = "Frequency")
+
+
+
+
+barchart(key ~ freq, data = head(hector_adjvs_freq, 20), col = "cadetblue", 
+         main = "Keywords - adjective phrases", xlab = "Frequency")
+
+
+
+
+hector_colloc <- keywords_collocation(x = y,
+                                      term  = 'lemma',
+                                      group = c('doc_id','paragraph_id','sentence_id'))
+
+
+
+
+
+hector_colloc$key <- factor(hector_colloc$keyword, levels = rev(hector_colloc$keyword))
+
+barchart(key ~ pmi, data = head(subset(hector_colloc, freq > 2), 20), col = "cadetblue", 
+         main = "Keywords identified by PMI Collocation", 
+         xlab = "PMI (Pointwise Mutual Information)")
+
+
+
+
+hector_rake <- keywords_rake(x = y, 
+                             term = "lemma",
+                             group = c('doc_id','paragraph_id','sentence_id'), 
+                             relevant = y$upos %in% c("NOUN", "ADJ"))
+
+hector_rake$key <- factor(hector_rake$keyword, levels = rev(hector_rake$keyword))
+
+barchart(key ~ rake, data = head(subset(hector_rake, freq > 3), 20), col = "cadetblue", 
+         main = "Keywords identified by RAKE", 
+         xlab = "Rake")
+
+
+
+
+
+y$phrase_tag <- as_phrasemachine(y$upos, type = "upos")# recode upos to 1-letter tag for better regex pattern
+
+stats <- keywords_phrases(x = y$phrase_tag, term = tolower(y$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+
+stats <- subset(stats, ngram > 1 & freq >3)
+
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+
+barchart(key ~ freq, data = head(stats, 20), col = "cadetblue", 
+         main = "Keywords - simple noun phrases", xlab = "Frequency")
+
+```
+
+
+
+
+
+
+```{r}
+hector_features_list <- c()
+hector_features_list <- tolower(hector_features_list)
+
+car2_review_df <- y[,1:4] # select doc_id, par_id, sentence_id, sentence
+car2_review_df <- car2_review_df[!duplicated(car2_review_df),] # remove duplicate sentences
+car2_review_df
+
+car2_review_senti <- sentiment_by(car2_review_df$sentence)
+
+car2_review_df$sentence_senti <- car2_review_senti$ave_sentiment
+car2_review_df
+
+car2_review_df$feature <- NA
+
+car2_review_df$sentence <- tolower(car2_review_df$sentence)
+
+for (feature in hector_features_list)
+{ 
+  car2_review_df$feature <- ifelse(grepl(feature,car2_review_df$sentence),feature,car2_review_df$feature)
+}
+ 
+car2_review_df
+
+
+car2_review_df %>% 
+  select(doc_id,sentence_senti,feature)%>%
+  group_by(feature)%>%
+  summarise(mean_sentiment = mean(sentence_senti))
+```
+
+
+
+```{r}
+car2_review_df %>%
+  filter(feature=="bose speaker")%>%
+  select(sentence,sentence_senti)
+```
+
+
+
+
+
+
+
+Jeep Compass
+
+```{r}
+
+
+compass_nouns <- z %>% 
+                subset(.,upos %in% "NOUN")
+
+compass_verbs <- z %>% 
+                subset(.,upos %in% "VERB")
+
+compass_adjvs <- z %>% 
+                subset(.,upos %in% "ADJ")
+
+
+compass_nouns_freq <- txt_freq(compass_nouns$lemma)
+compass_verbs_freq <- txt_freq(compass_verbs$lemma)
+compass_adjvs_freq <- txt_freq(compass_adjvs$lemma)
+
+
+compass_verbs_freq <- compass_verbs_freq %>%
+                     rename(word = key) %>%
+                     anti_join(stopwordslist) %>%
+                     rename(key = word)
+
+compass_adjvs_freq <- compass_adjvs_freq %>%
+                     rename(word = key) %>%
+                     anti_join(stopwordslist) %>%
+                     rename(key = word)
+
+
+
+compass_nouns_freq$key <- factor(compass_nouns_freq$key, levels = rev(compass_nouns_freq$key))
+compass_verbs_freq$key <- factor(compass_verbs_freq$key, levels = rev(compass_verbs_freq$key))
+compass_adjvs_freq$key <- factor(compass_adjvs_freq$key, levels = rev(compass_adjvs_freq$key))
+
+
+barchart(key ~ freq, data = head(compass_nouns_freq, 20), col = "cadetblue", 
+         main = "Keywords - simple noun phrases", xlab = "Frequency")
+
+
+
+
+barchart(key ~ freq, data = head(compass_verbs_freq, 20), col = "cadetblue", 
+         main = "Keywords - verb phrases", xlab = "Frequency")
+
+
+
+
+barchart(key ~ freq, data = head(compass_adjvs_freq, 20), col = "cadetblue", 
+         main = "Keywords - adjective phrases", xlab = "Frequency")
+
+
+
+
+compass_colloc <- keywords_collocation(x = z,
+                                      term  = 'lemma',
+                                      group = c('doc_id','paragraph_id','sentence_id'))
+
+
+
+compass_colloc$key <- factor(compass_colloc$keyword, levels = rev(compass_colloc$keyword))
+
+barchart(key ~ pmi, data = head(subset(compass_colloc, freq > 2), 20), col = "cadetblue", 
+         main = "Keywords identified by PMI Collocation", 
+         xlab = "PMI (Pointwise Mutual Information)")
+
+
+
+
+compass_rake <- keywords_rake(x = z, 
+                             term = "lemma",
+                             group = c('doc_id','paragraph_id','sentence_id'), 
+                             relevant = z$upos %in% c("NOUN", "ADJ"))
+
+compass_rake$key <- factor(compass_rake$keyword, levels = rev(compass_rake$keyword))
+
+barchart(key ~ rake, data = head(subset(compass_rake, freq > 3), 20), col = "cadetblue", 
+         main = "Keywords identified by RAKE", 
+         xlab = "Rake")
+
+
+
+
+
+z$phrase_tag <- as_phrasemachine(z$upos, type = "upos")# recode upos to 1-letter tag for better regex pattern
+
+stats <- keywords_phrases(x = z$phrase_tag, term = tolower(z$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+
+stats <- subset(stats, ngram > 1 & freq >3)
+
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+
+barchart(key ~ freq, data = head(stats, 20), col = "cadetblue", 
+         main = "Keywords - simple noun phrases", xlab = "Frequency")
+
+```
+
+
+
+```{r}
+compass_features_list <- c()
+compass_features_list <- tolower(compass_features_list)
+
+car3_review_df <- z[,1:4] # select doc_id, par_id, sentence_id, sentence
+car3_review_df <- car3_review_df[!duplicated(car3_review_df),] # remove duplicate sentences
+car3_review_df
+
+car3_review_senti <- sentiment_by(car3_review_df$sentence)
+
+car3_review_df$sentence_senti <- car3_review_senti$ave_sentiment
+car3_review_df
+
+car3_review_df$feature <- NA
+
+car3_review_df$sentence <- tolower(car3_review_df$sentence)
+
+for (feature in compass_features_list)
+{ 
+  car3_review_df$feature <- ifelse(grepl(feature,car3_review_df$sentence),feature,car3_review_df$feature)
+}
+ 
+car3_review_df
+
+
+car3_review_df %>% 
+  select(doc_id,sentence_senti,feature)%>%
+  group_by(feature)%>%
+  summarise(mean_sentiment = mean(sentence_senti))
+```
+
+
+```{r}
+car3_review_df %>%
+  filter(feature=="bose speaker")%>%
+  select(sentence,sentence_senti)
+```
+
+
